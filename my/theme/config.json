@@ -19,5 +19,15 @@
   "ambient_glow": true,
   "focus_overshoot": true,
   "festival": "diwali",
-  "festival_until": "2026-11-12"
+  "festival_until": "2026-11-12",
+  "hidden_apps": [
+    "com.android.tv",
+    "com.mitv.gallery"
+  ],
+  "live_tv_package": "com.android.tv",
+  "tile_menu": true,
+  "app_library": true,
+  "home_idle_clock_minutes": 10,
+  "power_on_home_always": true,
+  "key_filter": false
 }

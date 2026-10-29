@@ -14,8 +14,8 @@ powershell -ExecutionPolicy Bypass -File tools\theme.ps1 -TvHost 192.168.1.50 th
 
 `tools/venv/bin/python -I tools/manage.py list themes` and `list switches` list them from this file, `show <name>` gives one with its
 screenshot, and `manage.py set <switch> <value> --theme <your folder>` writes a key into a theme folder of your own
-and pushes it with `theme.sh`. The folder has to be outside this checkout: one under `themes/` or `examples/` is
-refused (copy a theme first), and a `config.json` it cannot read is named before anything is written or pushed.
+and pushes it with `theme.sh`. The folder has to be outside this checkout: one under `themes/`, `examples/` or `my/` (this
+fork's own TV setup) is refused (copy a theme first), and a `config.json` it cannot read is named before anything is written or pushed.
 
 | Theme | What it does | Screenshot |
 |---|---|---|

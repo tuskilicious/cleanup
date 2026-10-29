@@ -339,7 +339,7 @@ class SetThemeFolderTest(unittest.TestCase):
         for path in sorted(ROOT.glob("*/*/config.json")):
             shipped.setdefault(path.relative_to(ROOT).parts[0], set()).add(path)
         self.assertGreaterEqual(sum(len(v) for v in shipped.values()), 60, "no config.json files were found")
-        self.assertEqual({"examples", "themes"}, set(shipped), "a folder with a config.json that set does not guard")
+        self.assertEqual({"examples", "themes", "my"}, set(shipped), "a folder with a config.json that set does not guard")
         self.assertEqual(set(shipped), set(manage.PROJECT_FOLDERS))
 
 

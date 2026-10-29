@@ -3,6 +3,11 @@
 The setup on this TV, to put back after a reset or a firmware update. Set `TV_HOST` to the TV's address and switch
 USB debugging on first.
 
+`launcher/.../config.xml` keeps the upstream defaults (plus `continue_watching` on). Everything particular to this
+TV lives in `my/theme/config.json`: the dock, the hidden Live TV app, tile menu, app library, idle clock,
+power-on Home, and `key_filter` off, which a held Volume button needs here. So push the theme after every
+launcher install.
+
 | What | Apply | Undo |
 |---|---|---|
 | Debloat list (from `examples/xiaomi-mitv-axso0`, keeping Assistant, Chromecast and FanCode) | `tools/disable.sh my/debloat.txt` | `tools/restore.sh my/debloat.txt` |
