@@ -1,0 +1,23 @@
+{
+  "wallpaper": true,
+  "wallpaper_rotation_minutes": 15,
+  "wallpaper_order": "shuffle",
+  "wallpaper_captions": false,
+  "wallpaper_true_color": false,
+  "wallpaper_dim": 0,
+  "columns": 6,
+  "dock_apps": [
+    "com.google.android.youtube.tv",
+    "com.netflix.ninja",
+    "com.amazon.amazonvideo.livingroom",
+    "com.apple.atve.androidtv.appletv",
+    "com.crunchyroll.crunchyroid",
+    "com.fancode.tv"
+  ],
+  "dock_glass": true,
+  "app_glow": true,
+  "ambient_glow": true,
+  "focus_overshoot": true,
+  "festival": "diwali",
+  "festival_until": "2026-11-12"
+}
