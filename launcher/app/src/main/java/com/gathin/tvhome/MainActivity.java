@@ -52,12 +52,14 @@ import android.text.Spanned;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.SoundEffectConstants;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.AnimationUtils;
@@ -190,6 +192,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean lunar;
     private int lunarOffset;
     private TextView stats;
+    /** config.xml continue_watching: the Watch Next row above the dock; null when off. */
+    private ContinueRow continueRow;
+    /** Every Watch Next row from the last load, newest first, and what the row shows of it: the focused dock
+     *  app's package and label, and which load that was drawn from. */
+    private List<ContinueWatching.Item> continueAll = new ArrayList<>();
+    private String continueFor = "", continueForLabel = "", continueShownFor;
+    private List<ContinueWatching.Item> continueShownFrom;
     private List<RaceWeekend.Race> raceCalendar;
     private View racePanel;
     private TextView raceKicker, raceHeadline, raceSessions;
@@ -649,6 +658,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Order savedOrder = Order.load(Order.file(this));
         adapter.setSavedOrder(Order.ranks(savedOrder, dockApps), Order.docked(savedOrder, dockApps));
         grid.setAdapter(adapter);
+        setUpContinueRow();
 
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
@@ -851,15 +861,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder lands.
-                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                // One row down: the Continue watching row when it is up, else the dock tile Up came from,
+                // not wherever the focus finder lands.
+                if (continueRow != null && continueRow.isShowing()) continueRow.focusCard();
+                else focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+            if (keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
+            // Step to the neighbouring shown pill ourselves: the focus finder would rather drop into the
+            // Continue watching row just below the bar than move sideways along it.
+            ViewGroup bar = findViewById(R.id.topButtons);
+            int step = (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) != rtlMenuBar ? 1 : -1;
+            for (int i = bar.indexOfChild(v) + step; i >= 0 && i < bar.getChildCount(); i += step) {
+                View next = bar.getChildAt(i);
+                if (next.getVisibility() == View.VISIBLE) {
+                    next.requestFocus();
+                    return true;
+                }
+            }
+            return true;   // an end of the bar: stay put
         };
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
@@ -1025,6 +1045,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         restartIdleClock();
         promptsPaused = false;
+        loadContinueRow();
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         switch (tileRefresh.onResume(packagesChangedSinceRebuild())) {
             case REBUILD:
@@ -1290,6 +1311,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        posterLoader.shutdownNow();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
         wallpaperPlayer.close();
@@ -1702,6 +1724,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public void onTileFocused(int position, View card) {
         lastFocused = position;
+        if (continueRow != null) {
+            continueRow.setWanted(position < COLUMNS);
+            AppAdapter.Entry entry = position < COLUMNS ? adapter.entryAt(position) : null;
+            if (entry != null && !entry.pkg.equals(continueFor)) {
+                continueFor = entry.pkg;
+                continueForLabel = entry.label;
+                // Once the focus settles: sliding along the dock rebuilds the row once, not at every step.
+                handler.removeCallbacks(showContinueRowTask);
+                handler.postDelayed(showContinueRowTask, CONTINUE_SETTLE_MS);
+            }
+        }
         lastFocusedKey = adapter.keyAt(position);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
@@ -2128,6 +2161,134 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         else glass.setAlpha(0f);
     }
 
+    // ---- Continue watching (config.xml continue_watching) ------------------------------------------
+
+    /** Off unless configured, and only with a dock row that has the room above it (not single_row). */
+    private void setUpContinueRow() {
+        if (!getResources().getBoolean(R.bool.continue_watching) || !dockRow || singleRow) return;
+        continueRow = new ContinueRow(this, new ContinueRow.Host() {
+            @Override public void onRowFocused() {
+                hideGlass();
+                hideHero();
+            }
+
+            @Override public void onRowUp() {
+                firstTopButton().requestFocus();
+            }
+
+            @Override public void onRowDown() {
+                focusTile(lastFocused < COLUMNS ? lastFocused : 0);
+            }
+
+            @Override public boolean inTopBar(View view) {
+                ViewGroup bar = findViewById(R.id.topButtons);
+                for (ViewParent p = view.getParent(); p != null; p = p.getParent()) if (p == bar) return true;
+                return false;
+            }
+
+            @Override public void onRowOpen(ContinueWatching.Item item) {
+                Intent i = ContinueWatching.intentFor(MainActivity.this, item);
+                if (i == null) return;
+                try {
+                    startActivity(i);
+                } catch (RuntimeException e) {
+                    // ActivityNotFound, or a SecurityException for an intent the app did not export.
+                    Log.w(ContinueWatching.TAG, "could not open " + item.pkg + ": " + e);
+                    Intent fallback = getPackageManager().getLeanbackLaunchIntentForPackage(item.pkg);
+                    if (fallback != null) startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                }
+            }
+        }, getString(R.string.continue_watching));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMarginStart((int) (56 * density));
+        root.addView(continueRow, root.indexOfChild(glass), lp);
+        // Under the clock block, and only where it clears the dock's title: on a screen too short for both, the
+        // row stays hidden rather than drawing over the title.
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            View anchor = stats.getVisibility() == View.VISIBLE ? stats : findViewById(R.id.leftBlock);
+            Rect a = new Rect(0, 0, anchor.getWidth(), anchor.getHeight());
+            root.offsetDescendantRectToMyCoords(anchor, a);
+            float y = a.bottom + 8 * density;
+            if (continueRow.getY() != y) continueRow.setY(y);
+            Rect g = new Rect(0, 0, grid.getWidth(), grid.getHeight());
+            root.offsetDescendantRectToMyCoords(grid, g);
+            float dockTop = g.top + grid.getPaddingTop();
+            float rowBottom = y + (13 + 6 + 12 + ContinueRow.CARD_H_DP + 12) * density;
+            float heroTop = dockTop - 40 * density - hero.getHeight();
+            continueRow.setFits(rowBottom <= heroTop);
+            // Line the cards up with the dock's tiles, first to last, instead of a fixed margin and the screen edge.
+            GridLayoutManager glm = (GridLayoutManager) grid.getLayoutManager();
+            View firstTile = glm.findViewByPosition(0), lastTile = glm.findViewByPosition(COLUMNS - 1);
+            View firstCard = firstTile != null ? firstTile.findViewById(R.id.card) : null;
+            View lastCard = lastTile != null ? lastTile.findViewById(R.id.card) : null;
+            if (firstCard == null || lastCard == null) return;
+            Rect f = new Rect(0, 0, firstCard.getWidth(), firstCard.getHeight());
+            root.offsetDescendantRectToMyCoords(firstCard, f);
+            Rect e = new Rect(0, 0, lastCard.getWidth(), lastCard.getHeight());
+            root.offsetDescendantRectToMyCoords(lastCard, e);
+            int pad = Math.round(ContinueRow.CARDS_PAD_DP * density);
+            FrameLayout.LayoutParams rlp = (FrameLayout.LayoutParams) continueRow.getLayoutParams();
+            int start = f.left - pad, width = e.right - f.left + 2 * pad;
+            if (rlp.getMarginStart() != start || rlp.width != width) {
+                rlp.setMarginStart(start);
+                rlp.width = width;
+                continueRow.post(() -> continueRow.setLayoutParams(rlp));
+            }
+        });
+    }
+
+    private static final long CONTINUE_SETTLE_MS = 150;
+    private final Runnable showContinueRowTask = this::showContinueRow;
+    /** The cards on screen now, to skip a rebuild that would draw the same ones (two apps on the same fallback). */
+    private volatile List<ContinueWatching.Item> continueShown = new ArrayList<>();
+
+    /** The row for the focused dock app (ContinueWatching.forPackage), rebuilt only when its cards change. */
+    private void showContinueRow() {
+        if (continueRow == null || continueFor.equals(continueShownFor) && continueAll == continueShownFrom) return;
+        boolean otherApp = !continueFor.equals(continueShownFor);
+        continueShownFor = continueFor;
+        continueShownFrom = continueAll;
+        List<ContinueWatching.Item> shown = ContinueWatching.forPackage(continueAll, continueFor);
+        continueRow.setCaption(getString(ContinueWatching.listening(shown) ? R.string.continue_listening
+                : R.string.continue_watching) + " · " + continueForLabel);
+        if (shown.equals(continueShown)) return;
+        continueShown = new ArrayList<>(shown);
+        continueRow.setItems(shown, otherApp);
+        loadPosters(shown);
+    }
+
+    /** One worker for posters, so moving along the dock queues its rows' fetches instead of racing them. */
+    private final java.util.concurrent.ExecutorService posterLoader = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    /** The posters of the cards on screen, each swapped in as it arrives: the row never waits for the slowest. */
+    private void loadPosters(List<ContinueWatching.Item> items) {
+        Context app = getApplicationContext();
+        posterLoader.execute(() -> {
+            for (ContinueWatching.Item item : items) {
+                if (isFinishing() || isDestroyed() || !continueShown.contains(item)) return;   // another app's row now
+                if (ContinueWatching.loadPoster(app, item)) handler.post(() -> {
+                    if (continueRow != null) continueRow.showPoster(item);
+                });
+            }
+        });
+    }
+
+    /** Once per resume, off the main thread: a provider query and a few local posters. No polling. */
+    private void loadContinueRow() {
+        if (continueRow == null) return;
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            List<ContinueWatching.Item> items = ContinueWatching.load(app);
+            handler.post(() -> {
+                if (continueRow == null || isFinishing() || isDestroyed()) return;
+                continueAll = items;
+                showContinueRow();
+            });
+        }, "continue-watching").start();
+    }
+
+
     // ---- optional system stats (config.xml show_stats) --------------------------------------------
 
     /** Background reader. Started only while Home is resumed and show_stats is on. */
@@ -2350,7 +2511,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {                      // dock row: the Continue watching row, else the top bar
+                if (continueRow == null || !continueRow.isShowing()) return false;
+                continueRow.focusCard();
+                grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+                return true;
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -2369,6 +2535,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override public void onLibraryFocused() {
         libraryFocusPending = false;
+        if (continueRow != null) continueRow.setWanted(false);
         hideGlass();
         hideHero();
     }
@@ -2913,7 +3080,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         diya = new DiyaDrawable(density);
         bell.setReducedMotion(reducedMotion);
         marigold.setReducedMotion(reducedMotion);
-        diya.setReducedMotion(reducedMotion);
+        // The flame's endless 15 fps flicker kept Home redrawing at rest. On a low-RAM TV it burns steady, and only
+        // its level changes move.
+        diya.setReducedMotion(reducedMotion
+                || ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).isLowRamDevice());
         setFestiveIcon(inputs, bell);
         setFestiveIcon(btnWifi, diya);
         setFestiveIcon(settings, marigold);
@@ -2925,6 +3095,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // The pills tint their icons to follow focus; the festive ones keep their own colours.
         pill.setCompoundDrawableTintList(null);
         pill.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null);
+        // The festive icons are gradient-filled paths, rasterised again in every frame anything on Home moves. On the
+        // Mi TV AXSO0's GPU that took a dock move from 9 ms to 32 ms a frame. As a layer they are drawn once and
+        // only redrawn when they change.
+        pill.setLayerType(View.LAYER_TYPE_HARDWARE, null);
     }
 
     /** Runs {@code action} when the view gains focus, keeping any focus listener it already had. */

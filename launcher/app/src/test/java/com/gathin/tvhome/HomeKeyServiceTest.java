@@ -57,4 +57,15 @@ public class HomeKeyServiceTest {
         assertTrue(HomeKeyService.stillArmed(SOON, SOON + HomeKeyService.SCREEN_ON_WINDOW_MS));
         assertFalse(HomeKeyService.stillArmed(SOON, 0));
     }
+
+    // power_on_home_always leaves the TV on HDMI only while a port reports a device that is on.
+    @Test public void hdmiDeviceOnNeedsAConnectedPort() {
+        assertFalse(HomeKeyService.hdmiDeviceOn(3, 0));
+        assertTrue(HomeKeyService.hdmiDeviceOn(3, 1));
+    }
+
+    @Test public void everyPortConnectedIsUntrustedAndCountsAsNone() {
+        assertFalse(HomeKeyService.hdmiDeviceOn(3, 3));
+        assertTrue(HomeKeyService.hdmiDeviceOn(1, 1));
+    }
 }

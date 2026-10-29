@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.media.tv.TvInputInfo;
+import android.media.tv.TvInputManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -345,9 +347,29 @@ public class HomeKeyService extends AccessibilityService {
     /** power_on_home_always: after the firmware has brought its last source back (Philips: within 0.5 s). */
     static final long POWER_ON_ALWAYS_DELAY_MS = 800L;
 
-    /** power_on_home_always: Home, unless a key was pressed since the screen came on (the user has the TV). */
+    /** power_on_home_always: Home, unless a key was pressed since the screen came on (the user has the TV)
+     *  or a device on an HDMI port is switched on (the TV is meant to come back to it). */
     private void homeAtPowerOn() {
-        if (stillArmed(SystemClock.elapsedRealtime(), powerOnUntil)) openHome();
+        if (stillArmed(SystemClock.elapsedRealtime(), powerOnUntil) && !hdmiDeviceOn()) openHome();
+    }
+
+    /** True when an HDMI port reports a device that is on. A port with nothing on it, or a device asleep, reports
+     *  something else (InputFold). Some TVs (Sony) report every port connected whatever is plugged in: that
+     *  state cannot be trusted, so it counts as no device, as in the Inputs menu. */
+    private boolean hdmiDeviceOn() {
+        TvInputManager tim = (TvInputManager) getSystemService(Context.TV_INPUT_SERVICE);
+        if (tim == null) return false;
+        int ports = 0, connected = 0;
+        for (TvInputInfo info : tim.getTvInputList()) {
+            if (!info.isPassthroughInput() || info.getType() != TvInputInfo.TYPE_HDMI || info.getParentId() != null) continue;
+            ports++;
+            if (tim.getInputState(info.getId()) == TvInputManager.INPUT_STATE_CONNECTED) connected++;
+        }
+        return hdmiDeviceOn(ports, connected);
+    }
+
+    static boolean hdmiDeviceOn(int ports, int connected) {
+        return connected > 0 && !(ports > 1 && connected == ports);
     }
 
     static boolean stillArmed(long now, long armedUntil) {
